@@ -298,6 +298,44 @@ app.get('/.well-known/x402', (_req, res) => {
     chain_id:     8453,
     asset:        'USDC',
     contract:     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    accepted_assets: [
+      {
+        symbol:    'USDC',
+        contract:  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        network:   'base',
+        chain_id:  8453,
+        primary:   true
+      },
+      {
+        symbol:    'USDT',
+        contract:  '0xfde4C96c8593536E31F229Ea8f37b2ADa2699bb2',
+        network:   'base',
+        chain_id:  8453,
+        primary:   false
+      },
+      {
+        symbol:     'USAd',
+        program_id: 'PENDING_ALEO_RESOLUTION',
+        network:    'aleo',
+        primary:    false,
+        issuer:     'Paxos Labs',
+        backing:    'Paxos Trust USDG 1:1',
+        privacy:    'zk-default',
+        docs:       'https://aleo.org/usad',
+        added:      '2026-04-29'
+      },
+      {
+        symbol:     'USDCx',
+        program_id: 'PENDING_ALEO_RESOLUTION',
+        network:    'aleo',
+        primary:    false,
+        issuer:     'Circle xReserve',
+        backing:    'USDC 1:1 (Ethereum reserve)',
+        privacy:    'zk-default',
+        docs:       'https://aleo.org/usdcx',
+        added:      '2026-04-29'
+      }
+    ],
     facilitator: {
       url:                    'https://hivemorph.onrender.com/v1/x402',
       supported_schemes:      ['exact'],
