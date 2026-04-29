@@ -314,34 +314,43 @@ app.get('/.well-known/x402', (_req, res) => {
         primary:   false
       },
       {
-        symbol:     'USAd',
-        program_id: 'PENDING_ALEO_RESOLUTION',
-        network:    'aleo',
-        primary:    false,
-        issuer:     'Paxos Labs',
-        backing:    'Paxos Trust USDG 1:1',
-        privacy:    'zk-default',
-        docs:       'https://aleo.org/usad',
-        added:      '2026-04-29'
+        symbol:               'USAd',
+        program_id:           'usad_stablecoin.aleo',
+        network:              'aleo',
+        network_name:         'aleo-mainnet',
+        primary:              false,
+        issuer:               'Paxos Labs',
+        backing:              'Paxos Trust USDG 1:1',
+        privacy:              'zk-default',
+        docs:                 'https://aleo.org/usad',
+        facilitator:          'https://hive-aleo-arc.onrender.com/v1/facilitator',
+        facilitator_treasury: 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
+        added:                '2026-04-29'
       },
       {
-        symbol:     'USDCx',
-        program_id: 'PENDING_ALEO_RESOLUTION',
-        network:    'aleo',
-        primary:    false,
-        issuer:     'Circle xReserve',
-        backing:    'USDC 1:1 (Ethereum reserve)',
-        privacy:    'zk-default',
-        docs:       'https://aleo.org/usdcx',
-        added:      '2026-04-29'
+        symbol:               'USDCx',
+        program_id:           'usdcx_stablecoin.aleo',
+        network:              'aleo',
+        network_name:         'aleo-mainnet',
+        primary:              false,
+        issuer:               'Circle xReserve',
+        backing:              'USDC 1:1 (Ethereum reserve)',
+        privacy:              'zk-default',
+        docs:                 'https://aleo.org/usdcx',
+        facilitator:          'https://hive-aleo-arc.onrender.com/v1/facilitator',
+        facilitator_treasury: 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
+        added:                '2026-04-29'
       }
     ],
     facilitator: {
-      url:                    'https://hivemorph.onrender.com/v1/x402',
+      url:                    'https://hive-aleo-arc.onrender.com/v1/facilitator',
       supported_schemes:      ['exact'],
-      supported_networks:     ['eip155:8453'],
+      supported_networks:     ['eip155:8453', 'aleo-mainnet'],
       syncFacilitatorOnStart: false,
-      cold_safe:              true
+      cold_safe:              true,
+      aleo_treasury:          'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
+      usad_program_id:        'usad_stablecoin.aleo',
+      usdcx_program_id:       'usdcx_stablecoin.aleo',
     },
     resources: [
       {
