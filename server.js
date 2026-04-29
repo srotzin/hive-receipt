@@ -284,6 +284,209 @@ app.get('/v1/receipt/list/:payer_did', (req, res) => {
   res.json({ payer_did, count: receipts.length, receipts });
 });
 
+// ── well-known / x402 ─────────────────────────────────────────────────────────
+
+app.get('/.well-known/x402', (_req, res) => {
+  res.json({
+    x402Version:  2,
+    cold_safe:    true,
+    service:      'hive-receipt',
+    version:      '1.0.0',
+    brand_color:  '#C08D23',
+    payTo:        '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    network:      'base',
+    chain_id:     8453,
+    asset:        'USDC',
+    contract:     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    facilitator: {
+      url:                    'https://hivemorph.onrender.com/v1/x402',
+      supported_schemes:      ['exact'],
+      supported_networks:     ['eip155:8453'],
+      syncFacilitatorOnStart: false,
+      cold_safe:              true
+    },
+    resources: [
+      {
+        path:        '/v1/receipt/sign',
+        method:      'POST',
+        description: 'Sign a payment receipt. Standard tier: $0.001 USDC. Audit tier: $0.10.',
+        'x-pricing': {
+          scheme: 'exact',
+          asset: 'USDC',
+          standard_atomic: 1000,
+          audit_atomic: 100000,
+          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.',
+        },
+        'x-payment-info': {
+          scheme: 'exact',
+          asset: 'USDC',
+          standard_atomic: 1000,
+          audit_atomic: 100000,
+          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.',
+        }
+      },
+      {
+        path:        '/v1/receipt/verify/:receipt_id',
+        method:      'GET',
+        description: 'Verify a Spectral-signed receipt. Free.',
+        'x-pricing':      { scheme: 'free', note: 'Verification is free. No payment required.' },
+        'x-payment-info': { scheme: 'free', note: 'Verification is free. No payment required.' }
+      }
+    ],
+    discovery_companions: {
+      agent_card: '/.well-known/agent-card.json',
+      ap2:        '/.well-known/ap2.json',
+      openapi:    '/.well-known/openapi.json'
+    },
+    disclaimers: {
+      not_a_security: true,
+      not_custody:    true,
+      not_insurance:  true,
+      signal_only:    true
+    }
+  });
+});
+
+// ── well-known / agent-card.json (A2A 0.1) ────────────────────────────────────
+
+app.get('/.well-known/agent-card.json', (req, res) => {
+  const pubkey = (typeof getPublicKeyB64 === 'function')
+    ? getPublicKeyB64()
+    : (typeof spectral !== 'undefined' ? (spectral.publicKeyB64 || null) : null);
+  res.json({
+    name:        'hive-receipt',
+    version:     '1.0.0',
+    description: 'Universal Spectral-signed payment receipts. x402 gated. Real on-chain verification.',
+    brand_color: '#C08D23',
+    did:         `did:web:${req.hostname}`,
+    protocol:    'A2A/0.1',
+    capabilities: [
+      'receipt.sign',
+      'receipt.verify',
+      'receipt.list'
+    ],
+    spectral: {
+      public_key:    pubkey,
+      signature_algo: 'ed25519',
+      jwks_endpoint: '/.well-known/jwks.json'
+    },
+    treasury: {
+      address:  '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+      network:  'base',
+      chain_id: 8453,
+      asset:    'USDC'
+    },
+    payment: {
+      protocol: 'x402',
+      version:  '2',
+      network:  'base',
+      chain_id: 8453,
+      asset:    'USDC',
+      contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      payTo:    '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+    },
+    mcp_endpoint: '/mcp',
+    tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts']
+  });
+});
+
+// ── well-known / ap2.json (AP2 0.1) ───────────────────────────────────────────
+
+app.get('/.well-known/ap2.json', (_req, res) => {
+  res.json({
+    ap2_version:   '0.1',
+    service:       'hive-receipt',
+    accepted_tokens: [
+      {
+        symbol:   'USDC',
+        contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        network:  'base',
+        chain_id: 8453,
+        decimals: 6
+      },
+      {
+        symbol:   'USDT',
+        contract: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+        network:  'base',
+        chain_id: 8453,
+        decimals: 6,
+        role:     'alternate'
+      }
+    ],
+    networks:           [{ name: 'base', chain_id: 8453, role: 'primary' }],
+    payment_protocols:  ['x402/v2'],
+    settlement: {
+      finality:  'on-chain',
+      network:   'base',
+      chain_id:  8453,
+      payTo:     '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+    },
+    paid_endpoints: [
+      { path: '/v1/receipt/sign', method: 'POST', description: 'Sign a payment receipt. Standard tier: $0.001 USDC. Audit tier: $0.10.' }
+    ],
+    free_endpoints: [
+      { path: '/v1/receipt/verify/:receipt_id', method: 'GET', description: 'Verify a Spectral-signed receipt. Free.' }
+    ],
+    brand_color: '#C08D23'
+  });
+});
+
+// ── well-known / openapi.json (OpenAPI 3.0.3 + x-pricing + x-payment-info) ────
+
+app.get('/.well-known/openapi.json', (_req, res) => {
+  res.json({
+    openapi: '3.0.3',
+    info: {
+      title:       'hive-receipt API',
+      version:     '1.0.0',
+      description: 'Universal Spectral-signed payment receipts. x402 gated. Real on-chain verification.',
+      contact:     { name: 'The Hivery', url: 'https://thehiveryiq.com' }
+    },
+    servers: [{ url: 'https://hive-receipt.onrender.com', description: 'Production (Render)' }],
+    paths: {
+      '/v1/receipt/sign': {
+        post: {
+          operationId: 'v1_receipt_sign',
+          summary: 'Sign a payment receipt. Standard tier: $0.001 USDC. Audit tier: $0.10.',
+          'x-pricing': {
+          scheme: 'exact',
+          asset: 'USDC',
+          standard_atomic: 1000,
+          audit_atomic: 100000,
+          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.'
+          },
+          'x-payment-info': {
+          scheme: 'exact',
+          asset: 'USDC',
+          standard_atomic: 1000,
+          audit_atomic: 100000,
+          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.'
+          },
+          responses: {
+            '200': { description: 'Success.' },
+            '402': { description: 'Payment Required — x402 challenge.' },
+            '400': { description: 'Validation error.' }
+          }
+        }
+      },
+      '/v1/receipt/verify/:receipt_id': {
+        get: {
+          operationId: 'v1_receipt_verify_:receipt_id',
+          summary: 'Verify a Spectral-signed receipt. Free.',
+          responses: {
+            '200': { description: 'Success.' },
+            '400': { description: 'Validation error.' }
+          }
+        }
+      }
+    }
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`hive-receipt listening on :${PORT}`);
 });
