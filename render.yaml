@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: hive-receipt
+    env: node
+    plan: starter
+    buildCommand: npm install --production
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: SPECTRAL_PRIVKEY_B64
+        sync: false
+      - key: SPECTRAL_PUBKEY_B64
+        sync: false

@@ -1,0 +1,46 @@
+name: hive-receipt
+description: Universal Spectral-signed payment receipts. x402 gated. On-chain verification for Base, Ethereum, Solana. Offline-verifiable via ed25519 pubkey.
+version: 1.0.0
+license: MIT
+author: Steve Rotzin <steve@thehiveryiq.com>
+homepage: https://github.com/srotzin/hive-receipt
+repository: https://github.com/srotzin/hive-receipt
+
+runtime: node
+entrypoint: server.js
+
+transport:
+  type: http
+  port: 3000
+
+mcp:
+  version: "2024-11-05"
+  protocol: streamable-http
+  endpoint: /mcp
+
+tools:
+  - name: sign_receipt
+    description: Sign a payment receipt with Spectral ed25519. Verifies on-chain (best-effort). x402 gated.
+  - name: verify_receipt
+    description: Verify a Spectral-signed receipt envelope by receipt_id. Offline-verifiable.
+  - name: list_my_receipts
+    description: List all receipts for a given payer DID.
+
+payment:
+  protocol: x402
+  network: base
+  chain_id: 8453
+  asset: USDC
+  payTo: "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e"
+  standard_amount_atomic: 1000
+  audit_amount_atomic: 100000
+
+tags:
+  - finance
+  - receipts
+  - x402
+  - base
+  - usdc
+  - ed25519
+  - hive
+  - solana
