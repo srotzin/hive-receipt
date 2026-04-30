@@ -161,3 +161,16 @@ All verification is best-effort. If the RPC is unreachable, `verification_status
 ---
 
 *Built on Base mainnet. Real rails only. Brand gold `#C08D23`. Hivemorph stays private.*
+
+
+---
+
+## Hive Civilization
+
+Hive Civilization is the cryptographic backbone of autonomous agent commerce — the layer that makes every agent transaction provable, every payment settable, and every decision defensible.
+
+This repository is part of the **PROVABLE** pillar.
+
+- thehiveryiq.com
+- hiveagentiq.com
+- agent-card: https://hivetrust.onrender.com/.well-known/agent-card.json
