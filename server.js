@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { initKeypair, getPublicKeyB64, signPayload, verifyEnvelope } from './lib/spectral.js';
 import { verifyOnChain } from './lib/onchain.js';
+import mppMiddleware from './middleware/mpp.js';
 
 const app = express();
 app.use(express.json());
@@ -60,6 +61,78 @@ function generateReceiptId() {
 }
 
 // ── routes ───────────────────────────────────────────────────────────────────
+
+
+// ─── MPP OpenAPI Discovery (public) ──────────────────────────────────────────
+// Required for MPPScan auto-discovery and mppx compatibility
+app.get('/openapi.json', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({
+    openapi: '3.0.3',
+    info: {
+      title: 'Hive Receipt — Spectral-Signed Payment Receipt Service',
+      version: '1.0.0',
+      description: 'Stream B/E receipt attestation service. Ed25519 Spectral-signed receipts, on-chain verification. USDC on Tempo/Base. Accepts x402 and MPP rails.',
+      contact: { name: 'Hive Civilization', url: 'https://thehiveryiq.com', email: 'steve@thehiveryiq.com' },
+    },
+    servers: [{ url: 'https://hive-receipt.onrender.com' }],
+    'x-mpp': {
+      realm: 'hive-receipt.onrender.com',
+      payment: { method: 'tempo', currency: '0x20c000000000000000000000b9537d11c60e8b50', decimals: 6, recipient: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      rails: ['x402', 'mpp'],
+      categories: ['receipts', 'attestation'],
+      integration: 'first-party',
+      tags: ['receipt', 'attestation', 'spectral', 'payment', 'stream-b', 'stream-e'],
+      treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    },
+    paths: {
+      '/v1/receipt/sign': {
+        post: {
+          summary: 'Sign a receipt',
+          description: 'Issue a Spectral-signed payment receipt. $0.05 USDC.',
+          'x-mpp-charge': { amount: '50000', intent: 'charge' },
+          responses: { '200': { description: 'Signed receipt' }, '402': { description: 'Payment required — x402 or MPP' } },
+        },
+      },
+      '/v1/receipt/batch': {
+        post: {
+          summary: 'Batch receipt signing',
+          description: 'Sign a batch of receipts. $0.50 USDC per batch.',
+          'x-mpp-charge': { amount: '500000', intent: 'charge' },
+          responses: { '200': { description: 'Batch signed' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/receipt/audit': {
+        post: {
+          summary: 'Audit-grade receipt',
+          description: 'Issue a receipt with 7-year retention. $0.10 USDC.',
+          'x-mpp-charge': { amount: '100000', intent: 'charge' },
+          responses: { '200': { description: 'Audit receipt issued' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/receipt/attest': {
+        post: {
+          summary: 'Attestation',
+          description: 'Attest a payment event. $0.10 USDC.',
+          'x-mpp-charge': { amount: '100000', intent: 'charge' },
+          responses: { '200': { description: 'Attestation issued' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/receipt/verify/:receipt_id': {
+        get: {
+          summary: 'Verify receipt',
+          description: 'Verify a receipt by ID. Free.',
+          responses: { '200': { description: 'Verification result' } },
+        },
+      },
+    },
+  });
+});
+
+// MPP rail — runs after x402, grants access via MPP Payment header
+// Payment: scheme="mpp", tx_hash="0x...", rail="tempo", amount="0.05"
+// IETF draft-ryan-httpauth-payment compliant. Tempo + Base mainnet only.
+app.use('/v1', mppMiddleware);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'hive-receipt', version: '1.0.0', ts: new Date().toISOString() });
