@@ -26,7 +26,7 @@
 https://hive-receipt.onrender.com
 ```
 
-x402 challenge pays to Monroe (`0x15184bf50b3d3f52b60434f8942b7d52f2eb436e`) on Base 8453, USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
+x402 challenge pays to Monroe (`0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E`) on Base 8453, USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
 
 ---
 

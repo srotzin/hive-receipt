@@ -6,7 +6,7 @@
  * MPP receipts emit Spectral receipts with payment_method: "mpp".
  *
  * Stream B/E — receipt service, attestation
- * Treasury: Monroe Base 0x15184bf50b3d3f52b60434f8942b7d52f2eb436e
+ * Treasury: Monroe Base 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E
  * Tempo RPC: https://rpc.tempo.xyz
  *
  * References:
@@ -20,12 +20,12 @@
 const PAYMENT_ADDRESS = (
   process.env.HIVE_RECEIPT_PAYMENT_ADDRESS ||
   process.env.HIVE_PAYMENT_ADDRESS ||
-  '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+  '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E'
 ).toLowerCase();
 
 const TEMPO_RPC_URL = process.env.TEMPO_RPC_URL || 'https://rpc.tempo.xyz';
 const BASE_RPC_URL  = process.env.BASE_RPC_URL  || 'https://mainnet.base.org';
-const USDC_CONTRACT = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+const USDC_CONTRACT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const TEMPO_USDCE   = '0x20c000000000000000000000b9537d11c60e8b50';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 // Self-referential — receipt service emits its own receipts directly to store

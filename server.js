@@ -19,7 +19,7 @@ app.use((req, res, next) => {
 
 
 const PORT = process.env.PORT || 3000;
-const MONROE = '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e';
+const MONROE = '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E';
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const NETWORK = 'base';
 const CHAIN_ID = 8453;
@@ -78,12 +78,12 @@ app.get('/openapi.json', (req, res) => {
     servers: [{ url: 'https://hive-receipt.onrender.com' }],
     'x-mpp': {
       realm: 'hive-receipt.onrender.com',
-      payment: { method: 'tempo', currency: '0x20c000000000000000000000b9537d11c60e8b50', decimals: 6, recipient: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      payment: { method: 'tempo', currency: '0x20c000000000000000000000b9537d11c60e8b50', decimals: 6, recipient: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E' },
       rails: ['x402', 'mpp'],
       categories: ['receipts', 'attestation'],
       integration: 'first-party',
       tags: ['receipt', 'attestation', 'spectral', 'payment', 'stream-b', 'stream-e'],
-      treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+      treasury: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
     },
     paths: {
       '/v1/receipt/sign': {
@@ -377,7 +377,7 @@ app.get('/.well-known/x402', (_req, res) => {
     service:      'hive-receipt',
     version:      '1.0.0',
     brand_color:  '#C08D23',
-    payTo:        '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    payTo:        '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
     network:      'base',
     chain_id:     8453,
     asset:        'USDC',
@@ -446,7 +446,7 @@ app.get('/.well-known/x402', (_req, res) => {
           asset: 'USDC',
           standard_atomic: 1000,
           audit_atomic: 100000,
-          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          payTo: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
           description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.',
         },
         'x-payment-info': {
@@ -454,7 +454,7 @@ app.get('/.well-known/x402', (_req, res) => {
           asset: 'USDC',
           standard_atomic: 1000,
           audit_atomic: 100000,
-          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          payTo: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
           description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.',
         }
       },
@@ -504,7 +504,7 @@ app.get('/.well-known/agent-card.json', (req, res) => {
       jwks_endpoint: '/.well-known/jwks.json'
     },
     treasury: {
-      address:  '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+      address:  '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
       network:  'base',
       chain_id: 8453,
       asset:    'USDC'
@@ -516,7 +516,7 @@ app.get('/.well-known/agent-card.json', (req, res) => {
       chain_id: 8453,
       asset:    'USDC',
       contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      payTo:    '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+      payTo:    '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E'
     },
     mcp_endpoint: '/mcp',
     tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts']
@@ -552,7 +552,7 @@ app.get('/.well-known/ap2.json', (_req, res) => {
       finality:  'on-chain',
       network:   'base',
       chain_id:  8453,
-      payTo:     '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+      payTo:     '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E'
     },
     paid_endpoints: [
       { path: '/v1/receipt/sign', method: 'POST', description: 'Sign a payment receipt. Standard tier: $0.001 USDC. Audit tier: $0.10.' }
@@ -586,7 +586,7 @@ app.get('/.well-known/openapi.json', (_req, res) => {
           asset: 'USDC',
           standard_atomic: 1000,
           audit_atomic: 100000,
-          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          payTo: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
           description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.'
           },
           'x-payment-info': {
@@ -594,7 +594,7 @@ app.get('/.well-known/openapi.json', (_req, res) => {
           asset: 'USDC',
           standard_atomic: 1000,
           audit_atomic: 100000,
-          payTo: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+          payTo: '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
           description: '$0.001 standard / $0.10 audit per receipt. payTo Monroe.'
           },
           responses: {

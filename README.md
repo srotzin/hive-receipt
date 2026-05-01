@@ -11,7 +11,7 @@
 `hive-receipt` issues cryptographically signed receipts for any on-chain payment across Base, Ethereum, and Solana. Every receipt is signed with a Spectral ed25519 keypair — the public key is advertised in the agent card so any party can verify offline without trusting the server.
 
 **Settlement rail:** Base mainnet — USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)  
-**Monroe treasury:** `0x15184bf50b3d3f52b60434f8942b7d52f2eb436e`  
+**Monroe treasury:** `0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E`  
 **Signature algo:** ed25519 (Spectral)  
 **On-chain verification:** Base, Ethereum, Solana — best-effort via public RPCs  
 
@@ -67,7 +67,7 @@ Standard tier — calling `POST /v1/receipt/sign` without `X-PAYMENT`:
     "asset": "USDC",
     "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "maxAmountRequired": "1000",
-    "payTo": "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e",
+    "payTo": "0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E",
     "resource": "/v1/receipt/sign",
     "description": "Hive universal receipt signature — $0.001 per receipt.",
     "mimeType": "application/json"
@@ -86,7 +86,7 @@ Audit tier: add `?tier=audit` — `maxAmountRequired` becomes `"100000"`.
   "receipt_id": "a1b2c3d4e5f6...",
   "tx_hash": "0xabc...",
   "network": "base",
-  "expected_recipient": "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e",
+  "expected_recipient": "0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E",
   "expected_amount_atomic": 1000000,
   "expected_asset": "USDC",
   "payer_did": "did:hive:0xpayer...",

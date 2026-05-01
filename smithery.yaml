@@ -31,7 +31,7 @@ payment:
   network: base
   chain_id: 8453
   asset: USDC
-  payTo: "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e"
+  payTo: "0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E"
   standard_amount_atomic: 1000
   audit_amount_atomic: 100000
 
