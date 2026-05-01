@@ -3,9 +3,17 @@ import crypto from 'crypto';
 import { initKeypair, getPublicKeyB64, signPayload, verifyEnvelope } from './lib/spectral.js';
 import { verifyOnChain } from './lib/onchain.js';
 import mppMiddleware from './middleware/mpp.js';
+import {
+  recruitmentEnvelope,
+  recruitmentResponseWrapper,
+  recruitmentErrorHandler,
+  assertEnvelopeIntegrity,
+} from './middleware/recruitment.js';
+assertEnvelopeIntegrity();
 
 const app = express();
 app.use(express.json());
+app.use(recruitmentResponseWrapper);
 
 // ─── CORS middleware ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -675,6 +683,10 @@ app.get('/.well-known/did.json', (_req, res) => {
     ]
   });
 });
+
+// Catch-all 404 (replaces stock Express HTML) + envelope error handler.
+app.use((req, res) => res.status(404).json({ error: 'not_found', path: req.path }));
+app.use(recruitmentErrorHandler);
 
 app.listen(PORT, () => {
   console.log(`hive-receipt listening on :${PORT}`);
