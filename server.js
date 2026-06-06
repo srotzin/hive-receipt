@@ -685,13 +685,34 @@ app.get('/.well-known/did.json', (_req, res) => {
 });
 
 // ── PAGE HIT TRACKER ─────────────────────────────────────────────────────────
-import { appendFileSync, readFileSync } from 'fs';
-const HIT_LOG = '/tmp/clarity_hits.json';
+const SUPA_URL = 'https://rdxdcbxeploukweaczrq.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJkeGRjYnhlcGxvdWt3ZWFjenJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwODk5NzcsImV4cCI6MjA5NTY2NTk3N30.5eUIH9xIIzrInHSYz1fuw_niM_qB7L0La79SQJkbjZQ';
+
+async function logHitToDB(entry){
+  try {
+    await fetch(`${SUPA_URL}/rest/v1/clarity_hits`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPA_KEY,
+        'Authorization': `Bearer ${SUPA_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(entry)
+    });
+  } catch(e){ console.error('[CLARITY HIT DB ERROR]', e.message); }
+}
+
+async function getHitsFromDB(){
+  const r = await fetch(`${SUPA_URL}/rest/v1/clarity_hits?select=*&order=ts.desc`, {
+    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
+  });
+  return r.json();
+}
 
 app.get('/ping/clarity', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
-  // Geo lookup
   let city = '', org = '', region = '';
   try {
     const geo = await fetch(`https://ipapi.co/${ip}/json/`).then(r => r.json());
@@ -709,16 +730,15 @@ app.get('/ping/clarity', async (req, res) => {
     ua:      req.headers['user-agent'] || '',
     ref:     req.headers['referer'] || '',
   };
-  try { appendFileSync(HIT_LOG, JSON.stringify(entry)+'\n'); } catch(e){}
+  await logHitToDB(entry);
   console.log('[CLARITY HIT]', JSON.stringify(entry));
   res.json({ ok: true });
 });
 
-app.get('/ping/clarity/log', (req, res) => {
+app.get('/ping/clarity/log', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
-    const raw  = readFileSync(HIT_LOG, 'utf8');
-    const hits = raw.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+    const hits = await getHitsFromDB();
     // HTML view
     const rows = hits.map(h => {
       const d = new Date(h.ts);
