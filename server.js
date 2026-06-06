@@ -715,10 +715,10 @@ app.get('/ping/clarity', async (req, res) => {
   const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
   let city = '', org = '', region = '';
   try {
-    const geo = await fetch(`https://ipapi.co/${ip}/json/`).then(r => r.json());
-    city   = geo.city    || '';
-    region = geo.region  || '';
-    org    = geo.org     || '';
+    const geo = await fetch(`http://ip-api.com/json/${ip}?fields=city,regionName,org`).then(r => r.json());
+    city   = geo.city       || '';
+    region = geo.regionName || '';
+    org    = geo.org        || '';
   } catch(e){}
   const entry = {
     ts:      new Date().toISOString(),
