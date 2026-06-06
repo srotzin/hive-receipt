@@ -684,6 +684,35 @@ app.get('/.well-known/did.json', (_req, res) => {
   });
 });
 
+// ── PAGE HIT TRACKER ─────────────────────────────────────────────────────────
+import { appendFileSync, readFileSync } from 'fs';
+const HIT_LOG = '/tmp/clarity_hits.json';
+
+app.get('/ping/clarity', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const entry = {
+    ts:      new Date().toISOString(),
+    ip:      req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
+    ua:      req.headers['user-agent'] || '',
+    ref:     req.headers['referer'] || '',
+    country: req.headers['cf-ipcountry'] || '',
+  };
+  try { appendFileSync(HIT_LOG, JSON.stringify(entry)+'\n'); } catch(e){}
+  console.log('[CLARITY HIT]', JSON.stringify(entry));
+  res.json({ ok: true });
+});
+
+app.get('/ping/clarity/log', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    const raw  = readFileSync(HIT_LOG, 'utf8');
+    const hits = raw.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+    res.json({ count: hits.length, hits });
+  } catch(e) {
+    res.json({ count: 0, hits: [], note: 'no hits yet' });
+  }
+});
+
 // Catch-all 404 (replaces stock Express HTML) + envelope error handler.
 app.use((req, res) => res.status(404).json({ error: 'not_found', path: req.path }));
 app.use(recruitmentErrorHandler);
