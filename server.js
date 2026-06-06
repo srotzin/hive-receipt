@@ -688,14 +688,26 @@ app.get('/.well-known/did.json', (_req, res) => {
 import { appendFileSync, readFileSync } from 'fs';
 const HIT_LOG = '/tmp/clarity_hits.json';
 
-app.get('/ping/clarity', (req, res) => {
+app.get('/ping/clarity', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
+  // Geo lookup
+  let city = '', org = '', region = '';
+  try {
+    const geo = await fetch(`https://ipapi.co/${ip}/json/`).then(r => r.json());
+    city   = geo.city    || '';
+    region = geo.region  || '';
+    org    = geo.org     || '';
+  } catch(e){}
   const entry = {
     ts:      new Date().toISOString(),
-    ip:      req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
+    ip,
+    city,
+    region,
+    country: req.headers['cf-ipcountry'] || '',
+    org,
     ua:      req.headers['user-agent'] || '',
     ref:     req.headers['referer'] || '',
-    country: req.headers['cf-ipcountry'] || '',
   };
   try { appendFileSync(HIT_LOG, JSON.stringify(entry)+'\n'); } catch(e){}
   console.log('[CLARITY HIT]', JSON.stringify(entry));
@@ -707,9 +719,42 @@ app.get('/ping/clarity/log', (req, res) => {
   try {
     const raw  = readFileSync(HIT_LOG, 'utf8');
     const hits = raw.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
-    res.json({ count: hits.length, hits });
+    // HTML view
+    const rows = hits.map(h => {
+      const d = new Date(h.ts);
+      const local = d.toLocaleString('en-US', { timeZone:'America/Los_Angeles', hour12:true });
+      return `<tr>
+        <td>${local}</td>
+        <td>${h.city||''}${h.region ? ', '+h.region : ''} ${h.country||''}</td>
+        <td>${h.org||''}</td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.ua||''}</td>
+        <td>${h.ref||'direct'}</td>
+      </tr>`;
+    }).join('');
+    res.setHeader('Content-Type','text/html');
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>CLARITY — Hit Log</title>
+<style>
+body{background:#070B11;color:#fff;font-family:'Inter Tight',sans-serif;padding:24px;}
+h2{color:#2F80FF;margin-bottom:16px;font-size:14px;letter-spacing:.1em;text-transform:uppercase;}
+table{border-collapse:collapse;width:100%;font-size:11px;}
+th{text-align:left;color:rgba(255,255,255,0.4);font-weight:600;letter-spacing:.08em;padding:6px 12px;border-bottom:1px solid rgba(47,128,255,0.15);}
+td{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:#fff;vertical-align:top;}
+tr:hover td{background:rgba(47,128,255,0.06);}
+.count{font-size:28px;font-weight:900;font-family:monospace;color:#34D399;margin-bottom:4px;}
+.sub{font-size:10px;color:rgba(255,255,255,0.35);margin-bottom:20px;}
+</style></head><body>
+<div class="count">${hits.length}</div>
+<div class="sub">total hits · /clarity/</div>
+<h2>Hit Log — PDT</h2>
+<table>
+<thead><tr><th>Time (PDT)</th><th>Location</th><th>Org / ISP</th><th>Browser</th><th>Referrer</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>
+</body></html>`);
   } catch(e) {
-    res.json({ count: 0, hits: [], note: 'no hits yet' });
+    res.setHeader('Content-Type','text/html');
+    res.send('<html><body style="background:#070B11;color:#fff;font-family:monospace;padding:24px">No hits yet.</body></html>');
   }
 });
 
