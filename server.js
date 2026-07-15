@@ -9,6 +9,9 @@ import {
   recruitmentErrorHandler,
   assertEnvelopeIntegrity,
 } from './middleware/recruitment.js';
+import { buildIntelligence } from './lib/intelligence.js';
+import { fetchEvents, insertHit } from './lib/site_store.js';
+import { checkOwnerAuth, getConfiguredToken } from './lib/owner_auth.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -685,29 +688,20 @@ app.get('/.well-known/did.json', (_req, res) => {
 });
 
 // ── PAGE HIT TRACKER ─────────────────────────────────────────────────────────
-const SUPA_URL = 'https://rdxdcbxeploukweaczrq.supabase.co';
-const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJkeGRjYnhlcGxvdWt3ZWFjenJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwODk5NzcsImV4cCI6MjA5NTY2NTk3N30.5eUIH9xIIzrInHSYz1fuw_niM_qB7L0La79SQJkbjZQ';
-
-async function logHitToDB(entry){
-  try {
-    await fetch(`${SUPA_URL}/rest/v1/clarity_hits`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPA_KEY,
-        'Authorization': `Bearer ${SUPA_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
-      },
-      body: JSON.stringify(entry)
-    });
-  } catch(e){ console.error('[CLARITY HIT DB ERROR]', e.message); }
-}
+// Telemetry source is Supabase table clarity_hits. Access is hardened in
+// lib/site_store.js so source failures surface truthfully instead of being
+// masked as "no data".
+const DISPLAY_TZ = process.env.SITE_TZ || 'America/Los_Angeles';
+const SITE_HOST  = process.env.SITE_HOST || 'thehiveryiq.com';
+// Stable per-deploy salt for pseudonymous visitor/session ids. Falls back to a
+// constant so ids stay stable across restarts even without extra config; set
+// SITE_INTEL_SALT to rotate.
+const INTEL_SALT = process.env.SITE_INTEL_SALT || 'hive-site-intel-v1';
 
 async function getHitsFromDB(){
-  const r = await fetch(`${SUPA_URL}/rest/v1/clarity_hits?select=*&order=ts.desc`, {
-    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
-  });
-  return r.json();
+  // Backward-compatible helper for the legacy HTML log view (newest first).
+  const { events } = await fetchEvents({ sinceIso: null, limit: 5000 });
+  return events.slice().reverse();
 }
 
 app.get('/ping/clarity', async (req, res) => {
@@ -720,6 +714,11 @@ app.get('/ping/clarity', async (req, res) => {
     region = geo.regionName || '';
     org    = geo.org        || '';
   } catch(e){}
+  // Page path + optional client session id, captured for per-visitor journeys.
+  const rawPath = req.query.p || req.query.path || '';
+  let path = '';
+  if (rawPath) { try { path = new URL(rawPath, `https://${SITE_HOST}`).pathname; } catch { path = String(rawPath).slice(0, 512); } }
+  const sid = (req.query.sid || req.query.s || '').toString().slice(0, 128) || null;
   const entry = {
     ts:      new Date().toISOString(),
     ip,
@@ -729,9 +728,12 @@ app.get('/ping/clarity', async (req, res) => {
     org,
     ua:      req.headers['user-agent'] || '',
     ref:     req.headers['referer'] || '',
+    path:    path || null,
+    sid,
   };
-  await logHitToDB(entry);
-  console.log('[CLARITY HIT]', JSON.stringify(entry));
+  const result = await insertHit(entry);
+  if (!result.ok) console.error('[CLARITY HIT DB ERROR]', result.error);
+  else if (result.degraded) console.warn('[CLARITY HIT] stored without path/sid columns (add them to unlock page analytics)');
   res.json({ ok: true });
 });
 
@@ -777,6 +779,92 @@ tr:hover td{background:rgba(47,128,255,0.06);}
     res.send('<html><body style="background:#070B11;color:#fff;font-family:monospace;padding:24px">No hits yet.</body></html>');
   }
 });
+
+// ── OWNER SITE INTELLIGENCE ──────────────────────────────────────────────────
+// Authenticated, deterministic, explainable analytics over the clarity_hits
+// event store. No external LLM. Never fabricates a narrative. See
+// docs/site-intelligence.md for the full contract.
+
+const SITE_LOOKBACK_MS = 7 * 86_400_000;
+
+async function gatherIntelligence({ now = new Date() } = {}) {
+  const sinceIso = new Date(now.getTime() - SITE_LOOKBACK_MS).toISOString();
+  const { events, health } = await fetchEvents({ sinceIso, limit: 10000 });
+  return buildIntelligence({
+    events,
+    now,
+    timezone: DISPLAY_TZ,
+    salt: INTEL_SALT,
+    siteHost: SITE_HOST,
+    sourceHealth: health,
+    lookbackMs: SITE_LOOKBACK_MS,
+  });
+}
+
+// Public, PII-free source health probe so the frontend can distinguish
+// "backend down" from "no data" without a token. Rail-style health only.
+app.get('/v1/site/health', async (_req, res) => {
+  try {
+    const sinceIso = new Date(Date.now() - 86_400_000).toISOString();
+    const { events, health } = await fetchEvents({ sinceIso, limit: 1 });
+    res.json({
+      status: health.reachable ? 'ok' : 'degraded',
+      source: health.source,
+      reachable: health.reachable,
+      error: health.error,
+      last_probe_utc: health.fetched_at,
+      latency_ms: health.latency_ms,
+      timezone: DISPLAY_TZ,
+      intelligence_endpoint: '/v1/site/intelligence',
+      owner_auth_configured: Boolean(getConfiguredToken()),
+      sampled_rows: events.length,
+    });
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+// Authenticated owner intelligence. GET /v1/site/intelligence
+// Auth: Authorization: Bearer <SITE_INTEL_TOKEN>  (or ?token=)
+// ?format=csv for a flat CSV export of session journeys.
+app.get('/v1/site/intelligence', async (req, res) => {
+  const auth = checkOwnerAuth(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ error: auth.code, message: auth.message });
+  }
+  try {
+    const report = await gatherIntelligence({ now: new Date() });
+    if ((req.query.format || '').toLowerCase() === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="site-intelligence-journeys.csv"');
+      return res.send(journeysToCsv(report));
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (e) {
+    console.error('[SITE INTEL ERROR]', e.stack || e.message);
+    res.status(500).json({ error: 'intelligence_error', message: e.message });
+  }
+});
+
+function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function journeysToCsv(report) {
+  const header = ['generated_at', 'session_id', 'visitor_id', 'is_crawler', 'entry_page', 'referrer_class', 'page_count', 'exit_page', 'started_at_utc', 'ended_at_utc', 'total_dwell_seconds', 'country', 'device', 'likely_organization'];
+  const lines = [header.join(',')];
+  for (const j of report.session_journeys) {
+    lines.push([
+      report.generated_at, j.session_id, j.visitor_id, j.is_crawler, j.entry_page,
+      j.referrer_class, j.page_count, j.exit_page, j.started_at_utc, j.ended_at_utc,
+      j.total_dwell_seconds, j.country, j.device, j.likely_organization,
+    ].map(csvCell).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
 
 // Catch-all 404 (replaces stock Express HTML) + envelope error handler.
 app.use((req, res) => res.status(404).json({ error: 'not_found', path: req.path }));

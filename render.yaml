@@ -14,3 +14,7 @@ services:
         sync: false
       - key: SPECTRAL_PUBKEY_B64
         sync: false
+      # Owner token for GET /v1/site/intelligence. Set the value in the Render
+      # dashboard. If unset, that endpoint returns 503 not_configured (closed).
+      - key: SITE_INTEL_TOKEN
+        sync: false
