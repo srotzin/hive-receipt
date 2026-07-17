@@ -331,7 +331,19 @@ depends on the `carnac_ledger_authorized()` helper from the first migration:
 
     docs/migrations/0002_carnac_lifecycle.sql
 
-Apply both out-of-band against the Supabase/Postgres instance — the service never
-runs them automatically. After applying, set the RLS gate once:
+A third idempotent migration consolidates the RLS gate onto the canonical v3
+`private.carnac_ledger_authorized()` helper: it moves the gate function into the
+`private` schema (executable by `anon`, bypassed by the service role), drops the
+old directly-callable `public` helper, splits the `carnac_judgments` gate into
+role-`anon` `carnac_server_insert`/`carnac_server_select` policies, and repoints
+the `carnac_dispatch`/`carnac_dispositions`/`carnac_howlers`/
+`carnac_lifecycle_stages`/`carnac_seals` policies to the private helper. It
+records the final production state so fresh environments and disaster recovery
+match production:
+
+    docs/migrations/0003_carnac_private_helper.sql
+
+Apply all three out-of-band against the Supabase/Postgres instance — the service
+never runs them automatically. After applying, set the RLS gate once:
 
     ALTER DATABASE <db> SET app.carnac_ledger_token = '<CARNAC_LEDGER_TOKEN>';
