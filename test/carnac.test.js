@@ -306,5 +306,10 @@ test('validateComputeResponse rejects malformed shapes', () => {
   assert.equal(validateComputeResponse({ level: 9, categories: [] }).ok, false);
   assert.equal(validateComputeResponse({ level: 2, categories: 'x' }).ok, false);
   assert.equal(validateComputeResponse({ level: 2, categories: [{ id: 'bogus', sev: 2 }] }).ok, false);
-  assert.equal(validateComputeResponse({ level: 1, categories: [{ id: 'health', sev: 3 }] }).ok, false);
+});
+
+test('validateComputeResponse clamps level up to the strongest category severity', () => {
+  const v = validateComputeResponse({ level: 1, categories: [{ id: 'health', sev: 3 }] });
+  assert.equal(v.ok, true);
+  assert.equal(v.classification.level, 3);
 });

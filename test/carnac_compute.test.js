@@ -183,6 +183,32 @@ test('an injected instruction in the content cannot lower the deterministic floo
   assert.equal(r.level, 3, 'deterministic floor stands regardless of a coerced low semantic level');
 });
 
+test('clamps level UP to the strongest category severity', async () => {
+  // Endpoint reports level 1 but returns a sev-3 category — normalize UP to 3.
+  mockFetchOnce(() => jsonResponse({ level: 1, categories: [{ id: 'health', sev: 3 }] }));
+  const r = await classifySemantic('x', { phase: 'formation' });
+  assert.equal(r.ok, true);
+  assert.equal(r.classification.level, 3, 'level clamped up to strongest sev');
+  assert.equal(r.classification.categories[0].sev, 3);
+});
+
+test('never clamps level DOWN below the reported level', async () => {
+  // Reported level 3 with a sev-1 category must stay 3, not drop to 1.
+  mockFetchOnce(() => jsonResponse({ level: 3, categories: [{ id: 'outbound', sev: 1 }] }));
+  const r = await classifySemantic('x', { phase: 'formation' });
+  assert.equal(r.ok, true);
+  assert.equal(r.classification.level, 3, 'level must not be lowered');
+});
+
+test('upward clamp still cannot lower the deterministic floor', async () => {
+  // Deterministic floor here is 3. A semantic response with level 0 and a sev-1
+  // category clamps up to 1, but composition must not pull the result below 3.
+  mockFetchOnce(() => jsonResponse({ level: 0, categories: [{ id: 'outbound', sev: 1 }] }));
+  const r = await classify('delete the production database permanently', { phase: 'formation' });
+  assert.equal(r.level, 3, 'deterministic floor stands over a low semantic result');
+  assert.equal(r.semantic_used, true);
+});
+
 test('deterministic fallback on a 400 "messages array required"', async () => {
   mockFetchOnce(() => jsonResponse({ error: 'messages array required' }, { ok: false, status: 400 }));
   const sem = await classifySemantic('x', { phase: 'formation' });
