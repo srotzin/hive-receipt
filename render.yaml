@@ -18,3 +18,21 @@ services:
       # dashboard. If unset, that endpoint returns 503 not_configured (closed).
       - key: SITE_INTEL_TOKEN
         sync: false
+      # ── Carnac judgment plane (all optional) ──────────────────────────────
+      # Approved Hive compute endpoint for the semantic reader. Unset => the
+      # deterministic floor runs alone; the plane never depends on it.
+      - key: CARNAC_COMPUTE_URL
+        sync: false
+      - key: CARNAC_COMPUTE_TOKEN
+        sync: false
+      # Durable judgment ledger (Supabase/PostgREST). Falls back to SUPA_URL/
+      # SUPA_KEY when unset; with neither, the in-memory ledger is authoritative.
+      - key: CARNAC_LEDGER_SUPA_URL
+        sync: false
+      - key: CARNAC_LEDGER_SUPA_KEY
+        sync: false
+      # Comma-separated base64 SPKI ed25519 attestor keys. Governs floor
+      # amendments: raising needs 1 signature, lowering needs a quorum of 2.
+      # Unset => the floor cannot be lowered.
+      - key: CARNAC_POLICY_ATTESTORS
+        sync: false

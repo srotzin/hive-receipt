@@ -49,6 +49,28 @@ MCP endpoint: `POST /mcp` (JSON-RPC 2.0, MCP `2024-11-05`)
 | POST | `/v1/receipt/sign` | **x402** | Sign a receipt; 402 fires without `X-PAYMENT` |
 | GET | `/v1/receipt/verify/:receipt_id` | none | Verify receipt signature |
 | GET | `/v1/receipt/list/:payer_did` | none | List receipts for payer |
+| POST | `/v1/carnac/sandbox` | none | Carnac judgment plane — public no-effect read |
+| POST | `/v1/carnac/judge` | none | Carnac durable read; may mint a Howler |
+| GET | `/v1/carnac/judgment/:id` | none | Fetch + re-verify a prior judgment |
+| GET | `/v1/carnac/policy` | none | Current governed floor |
+| GET | `/v1/carnac/health` | none | Compute + ledger + policy health |
+
+---
+
+## Carnac — judgment & routing plane
+
+Carnac reads consequence across a request's lifecycle (formation → invocation →
+output → effect) and composes a **signed disposition** using the same Spectral
+ed25519 key. It classifies against a deterministic floor (with an optional,
+structurally-validated semantic reader that can only *raise* a level), routes to
+one of seven responses, enforces idempotency/replay/order, records every judgment
+to a ledger (so the absence of a Howler is provable), and mints a **Howler**
+escalation receipt at the top severity. **Carnac decides the disposition; it
+never commits the effect itself.**
+
+See [`docs/carnac.md`](docs/carnac.md) for the full contract, endpoints, governed
+floor amendment rules, and environment variables. MCP tools `carnac_judge`
+(sandbox) and `carnac_verify` are exposed on `/mcp`.
 
 ---
 

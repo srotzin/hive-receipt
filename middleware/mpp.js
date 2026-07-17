@@ -173,6 +173,7 @@ function isFreePath(path) {
   if (FREE_PATHS.has(path)) return true;
   if (path.startsWith('/.well-known/')) return true;
   if (path.startsWith('/v1/site/')) return true; // owner analytics, token-gated separately
+  if (path.startsWith('/v1/carnac/')) return true; // judgment plane: sandbox is public, judge is a low-cost breadcrumb
 
   if (path.startsWith('/v1/receipt/verify/')) return true;
   if (path.startsWith('/v1/receipt/list/'))   return true;

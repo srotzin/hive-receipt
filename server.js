@@ -12,6 +12,10 @@ import {
 import { buildIntelligence } from './lib/intelligence.js';
 import { fetchEvents, insertHit } from './lib/site_store.js';
 import { checkOwnerAuth, getConfiguredToken } from './lib/owner_auth.js';
+import { judge, verifyJudgment, currentPolicy } from './lib/carnac/engine.js';
+import { amendPolicy } from './lib/carnac/policy.js';
+import { fetchJudgment, listByTrajectory, ledgerHealth } from './lib/carnac/ledger.js';
+import { computeHealth } from './lib/carnac/compute.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -161,6 +165,13 @@ app.get('/', (_req, res) => {
       audit_atomic: PRICE_AUDIT,
       audit_usd: '$0.10 — 7-year retention guarantee'
     },
+    carnac: {
+      description: 'Judgment & routing plane. Reads consequence across a request lifecycle, composes a signed disposition, never commits the effect itself.',
+      sandbox: '/v1/carnac/sandbox',
+      judge: '/v1/carnac/judge',
+      health: '/v1/carnac/health',
+      policy: '/v1/carnac/policy',
+    },
     docs: 'https://github.com/srotzin/hive-receipt'
   });
 });
@@ -187,7 +198,7 @@ app.get('/.well-known/agent.json', (_req, res) => {
       verify_endpoint: '/v1/receipt/verify/:receipt_id'
     },
     mcp_endpoint: '/mcp',
-    tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts']
+    tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts', 'carnac_judge', 'carnac_verify']
   });
 });
 
@@ -241,6 +252,32 @@ app.post('/mcp', async (req, res) => {
                 payer_did: { type: 'string' }
               }
             }
+          },
+          {
+            name: 'carnac_judge',
+            description: 'Read consequence on a request in the Carnac judgment plane (public no-effect sandbox). Classifies the text, applies the governed floor, composes a route and disposition, and returns a signed judgment envelope. Never commits any effect. For a durable ruling use POST /v1/carnac/judge.',
+            inputSchema: {
+              type: 'object',
+              required: ['request'],
+              properties: {
+                request: { type: 'string', description: 'The forming request text to read.' },
+                output: { type: 'string', description: 'Produced output text (output/effect phases).' },
+                phase: { type: 'string', enum: ['formation', 'invocation', 'output', 'effect'], description: 'Lifecycle phase of the read.' },
+                trajectory_id: { type: 'string', description: 'Bind the read to a trajectory to enforce lifecycle order.' },
+                seq: { type: 'integer', description: 'Monotonic read sequence within the trajectory.' }
+              }
+            }
+          },
+          {
+            name: 'carnac_verify',
+            description: 'Verify a Carnac judgment (or Howler) envelope by re-checking its ed25519 signature against the embedded public key.',
+            inputSchema: {
+              type: 'object',
+              required: ['judgment_id'],
+              properties: {
+                judgment_id: { type: 'string' }
+              }
+            }
           }
         ]
       }
@@ -284,6 +321,29 @@ app.post('/mcp', async (req, res) => {
         verified: e.verified, generated_at: e.generated_at
       }));
       return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ payer_did, count: receipts.length, receipts }) }] } });
+    }
+
+    if (toolName === 'carnac_judge') {
+      const result = await judge({
+        request: toolArgs.request,
+        output: toolArgs.output,
+        phase: toolArgs.phase,
+        trajectory_id: toolArgs.trajectory_id,
+        seq: toolArgs.seq,
+      }, { sandbox: true });
+      if (!result.ok) {
+        return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ error: result.code, message: result.message }) }] } });
+      }
+      return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ sandbox: true, judgment: result.envelope, howler: result.howler }) }] } });
+    }
+
+    if (toolName === 'carnac_verify') {
+      const envelope = await fetchJudgment(toolArgs.judgment_id);
+      if (!envelope) {
+        return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'judgment not found' }) }] } });
+      }
+      const verification = verifyJudgment(envelope);
+      return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ ...envelope, signature_valid: verification.valid }) }] } });
     }
 
     return res.json({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` } });
@@ -377,6 +437,91 @@ app.get('/v1/receipt/list/:payer_did', (req, res) => {
   const ids = payerIndex.get(payer_did) || [];
   const receipts = ids.map(id => receiptStore.get(id)).filter(Boolean);
   res.json({ payer_did, count: receipts.length, receipts });
+});
+
+// ── Carnac judgment & routing plane ───────────────────────────────────────────
+// The judgment plane reads consequence across a request's lifecycle and composes
+// a signed disposition. It never commits the effect itself. See docs/carnac.md.
+//   POST /v1/carnac/sandbox        public, no-effect read (never durable)
+//   POST /v1/carnac/judge          real read (durable ledger, may mint a Howler)
+//   GET  /v1/carnac/judgment/:id   fetch + re-verify a prior judgment
+//   GET  /v1/carnac/trajectory/:id list judgments bound to a trajectory
+//   GET  /v1/carnac/policy         current governed floor
+//   POST /v1/carnac/policy/amend   governed PolicyAmendment (attestor-signed)
+//   GET  /v1/carnac/health         compute + ledger + policy health
+
+function carnacBadInput(res, result) {
+  return res.status(result.status || 400).json({ error: result.code, message: result.message });
+}
+
+app.post('/v1/carnac/sandbox', async (req, res) => {
+  try {
+    const result = await judge(req.body || {}, { sandbox: true });
+    if (!result.ok) return carnacBadInput(res, result);
+    res.json({
+      sandbox: true,
+      judgment: result.envelope,
+      howler: result.howler,
+      ledger: result.ledger,
+      idempotent_replay: Boolean(result.idempotent_replay),
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'carnac_error', message: e.message });
+  }
+});
+
+app.post('/v1/carnac/judge', async (req, res) => {
+  try {
+    const result = await judge(req.body || {}, { sandbox: false });
+    if (!result.ok) return carnacBadInput(res, result);
+    res.json({
+      sandbox: false,
+      judgment: result.envelope,
+      howler: result.howler,
+      ledger: result.ledger,
+      idempotent_replay: Boolean(result.idempotent_replay),
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'carnac_error', message: e.message });
+  }
+});
+
+app.get('/v1/carnac/judgment/:id', async (req, res) => {
+  const envelope = await fetchJudgment(req.params.id);
+  if (!envelope) return res.status(404).json({ error: 'not_found', message: 'judgment not found' });
+  const verification = verifyJudgment(envelope);
+  res.json({ judgment: envelope, signature_valid: verification.valid, signature_error: verification.error || null });
+});
+
+app.get('/v1/carnac/trajectory/:id', (req, res) => {
+  const judgments = listByTrajectory(req.params.id);
+  res.json({ trajectory_id: req.params.id, count: judgments.length, judgments });
+});
+
+app.get('/v1/carnac/policy', (_req, res) => {
+  res.json(currentPolicy());
+});
+
+app.post('/v1/carnac/policy/amend', (req, res) => {
+  const { amendment, signatures } = req.body || {};
+  const result = amendPolicy(amendment, signatures || []);
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  res.json({ ok: true, direction: result.direction, policy: result.policy });
+});
+
+app.get('/v1/carnac/health', async (_req, res) => {
+  const [compute, ledger] = await Promise.all([computeHealth(), ledgerHealth()]);
+  const policy = currentPolicy();
+  const status = ledger.durable_configured && !ledger.durable_reachable ? 'degraded' : 'ok';
+  res.json({
+    status,
+    service: 'carnac',
+    spectral_pubkey: getPublicKeyB64(),
+    compute,
+    ledger,
+    policy,
+    ts: new Date().toISOString(),
+  });
 });
 
 // ── well-known / x402 ─────────────────────────────────────────────────────────
@@ -507,7 +652,9 @@ app.get('/.well-known/agent-card.json', (req, res) => {
     capabilities: [
       'receipt.sign',
       'receipt.verify',
-      'receipt.list'
+      'receipt.list',
+      'carnac.judge',
+      'carnac.verify'
     ],
     spectral: {
       public_key:    pubkey,
@@ -530,7 +677,7 @@ app.get('/.well-known/agent-card.json', (req, res) => {
       payTo:    '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E'
     },
     mcp_endpoint: '/mcp',
-    tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts']
+    tools: ['sign_receipt', 'verify_receipt', 'list_my_receipts', 'carnac_judge', 'carnac_verify']
   });
 });
 
