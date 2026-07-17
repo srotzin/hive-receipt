@@ -24,6 +24,14 @@ import { verifyArtifact, verifyById } from './lib/carnac/verify.js';
 import { buildExport, exportToCsv } from './lib/carnac/export.js';
 import { sealTrajectory } from './lib/carnac/seal.js';
 import { sandboxDispatchTrace } from './lib/carnac/dispatch.js';
+import {
+  openLifecycle,
+  appendStage,
+  getLifecycle,
+  verifyLifecycle,
+  drainFinalize,
+  startFinalizer,
+} from './lib/carnac/lifecycle.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -684,6 +692,85 @@ app.post('/v1/carnac/seal', async (req, res) => {
   res.json({ ok: true, seal: result.seal, verification: result.verification, source: result.source, ledger: result.ledger });
 });
 
+// ── Lifecycle chain ───────────────────────────────────────────────────────────
+// One signed chain for one inference, from the prompt-window boundary through
+// execution to downstream effect. The serving path (open/append/seal) is local
+// only: bounded validation, canonicalization, domain-separated hashing, and an
+// in-memory append + enqueue. No synchronous network call and no synchronous
+// public-key signature. Signing, durable persistence, and Merkle batching happen
+// asynchronously in the finalizer. Public verification needs no plaintext.
+
+// Open a lifecycle. Tenant is taken from the authenticated caller, never the body,
+// so a caller can never open a lifecycle under a tenant it does not control.
+app.post('/v1/carnac/lifecycle/open', (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const body = req.body || {};
+  const result = openLifecycle({
+    tenant_id: auth.tenant_id,
+    lifecycle_id: body.lifecycle_id || undefined,
+    trajectory_id: body.trajectory_id || undefined,
+    parent_lifecycle_id: body.parent_lifecycle_id || undefined,
+    policy_version: body.policy_version || undefined,
+    replay_class: body.replay_class || undefined,
+    prefix_commit: body.prefix_commit || undefined,
+    prefix_text: body.prefix_text || undefined,
+    seed_receipt_zero: body.seed_receipt_zero || undefined,
+  });
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  res.json({ ok: true, lifecycle: result.lifecycle });
+});
+
+// Append a typed stage. Raw prompt/context/output text is hashed locally and
+// dropped; only commitments are stored. Instruction authority is enforced here.
+app.post('/v1/carnac/lifecycle/:id/stage', (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const body = req.body || {};
+  const result = appendStage({ ...body, tenant_id: auth.tenant_id, lifecycle_id: req.params.id });
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  res.json({ ok: true, stage: result.stage, idempotent_replay: Boolean(result.idempotent_replay) });
+});
+
+// Read a lifecycle's status: ordered stages, head, pending/final counts. Scoped
+// to the caller's tenant; another tenant's lifecycle is indistinguishable from
+// a missing one.
+app.get('/v1/carnac/lifecycle/:id', (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const result = getLifecycle(auth.tenant_id, req.params.id);
+  if (!result.ok) return res.status(404).json({ error: 'not_found', message: 'lifecycle not found' });
+  res.json({ ok: true, lifecycle: result.lifecycle });
+});
+
+// Force-drain the finalizer (ops/testing). Signing and persistence otherwise run
+// on the background interval; this makes the pending->final transition observable
+// on demand without waiting.
+app.post('/v1/carnac/lifecycle/:id/finalize', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const exists = getLifecycle(auth.tenant_id, req.params.id);
+  if (!exists.ok) return res.status(404).json({ error: 'not_found', message: 'lifecycle not found' });
+  const result = await drainFinalize();
+  const after = getLifecycle(auth.tenant_id, req.params.id);
+  res.json({ ok: true, drain: result, lifecycle: after.ok ? after.lifecycle : null });
+});
+
+// Public verification: recompute every stage digest and chain head, verify each
+// finalized signature over the canonical core, and check Merkle inclusion. No
+// authentication and no plaintext are required; the caller submits the stages
+// (by value) and gets back a full structural verdict.
+app.post('/v1/carnac/lifecycle/verify', (req, res) => {
+  try {
+    const body = req.body || {};
+    const stages = Array.isArray(body.stages) ? body.stages : (body.lifecycle && body.lifecycle.stages) || [];
+    const result = verifyLifecycle(stages);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: 'carnac_error', message: e.message });
+  }
+});
+
 app.get('/v1/carnac/health', async (_req, res) => {
   const [compute, ledger, pq] = await Promise.all([computeHealth(), ledgerHealth(), pqHealth()]);
   const policy = currentPolicy();
@@ -1208,4 +1295,7 @@ app.use(recruitmentErrorHandler);
 
 app.listen(PORT, () => {
   console.log(`hive-receipt listening on :${PORT}`);
+  // Background lifecycle finalizer: signs, batches, and persists pending stages
+  // off the serving path. Unref'd so it never keeps the process alive on its own.
+  startFinalizer();
 });

@@ -142,6 +142,66 @@ post-quantum signature — none of which are simulated.
   the feature digest, consequence vector, policy/rule ids, routing data, and
   signed commitments cross any boundary.
 
+## The lifecycle chain
+
+`judge()` conducts one read. The **lifecycle chain** (`lib/carnac/lifecycle.js`)
+composes many reads into a single append-only, signed chain for one inference —
+from the prompt-window boundary, through execution, to the downstream effect. It
+does not reimplement the primitives above; it composes them (the ed25519 spectral
+signer, the ML-DSA-65 typed signer, domain-separated hashing, and the Supabase
+mirror) into a chain of **typed stages**.
+
+**Latency contract.** The serving path (`appendStage`) performs only bounded
+local validation, canonicalization, domain-separated hashing, a chain-link, and
+an in-memory append + enqueue. It makes **no synchronous network call and
+produces no synchronous public-key signature**. Signing (ed25519 canonical, then
+best-effort ML-DSA-65), Merkle batching, and durable persistence happen
+asynchronously in a background finalizer that moves each stage from `pending` to
+`final`. Serving stays fail-open; receipting stays fail-closed on the durable
+mirror. The only intentionally blocking path remains the customer-selected
+fail-closed policy gate handled by `judge()`/Imprimatur, not here.
+
+**Stage types.** `receipt_zero`, `context_commit`, `intent`, `gate`,
+`attestation_ref`, `model_identity`, `invocation`, `output_commit`, `tool_call`,
+`braid_link`, `action`, `disposition`, `r3pv`. A stage records only commitments
+(hashes), an origin, and evidence status — never raw prompt or output.
+
+- **Deterministic canonicalization** (`lib/carnac/canon.js`) — object keys sorted
+  recursively, arrays preserved, non-finite/unsupported values rejected. Every
+  digest is domain-separated (`carnac.stage.v1`, `carnac.chain.v1`, …) so a digest
+  minted for one purpose can never be reused as another.
+- **Order-independent signatures** — stages are signed with `signCanonical`
+  (`ed25519-canonical`, additive to the existing `signPayload`; the same key),
+  so an envelope verifies regardless of field order after storage or re-parse.
+- **Context-span origin typing + instruction authority** — an origin is one of
+  `principal | operator | retrieval | tool | agent`. Only `principal` and
+  `operator` may carry instructions; an instruction-bearing span from a data-only
+  origin (retrieved document, tool result, peer agent) is refused `403`. No prose
+  is inspected — authority is structural.
+- **Evidence honesty (S2S)** — `attestation_ref` evidence is labeled
+  `hardware-rooted | simulated | unavailable`. `hardware-rooted` **requires** a
+  `source_ref`; without one the append is refused. Nothing is auto-elevated to
+  hardware-rooted. Absent real hardware evidence, the chain says so.
+- **Receipt #0 reuse** — a shared system-prompt prefix under one policy version
+  reuses one Receipt #0 across calls, keyed `(tenant, policy_version,
+  prefix_commit)`, so per-call proof cost amortizes.
+- **Merkle micro-batching** — the finalizer commits one Merkle root per batch and
+  attaches each stage an O(log n) inclusion path, so a single stage still verifies
+  offline against the batch root. This is implemented and verified end to end.
+- **Braided delegation** — a `braid_link` stage records a delegated parent
+  lifecycle (`parent_lifecycle_id`) with a scope commitment, chaining an agent
+  swarm's sub-lifecycles to their parent.
+- **Replay classes** — each stage carries a replay class `R0 | R1 | R2`.
+- **No plaintext verification** — `verifyLifecycle` recomputes every stage digest
+  and chain head, verifies each finalized signature over the canonical core, and
+  checks Merkle inclusion, all from commitments alone. It needs no auth and no raw
+  content. Pending (unsigned) stages are reported as pending, not as failures.
+
+Durable rows are written only for **finalized**, hash-only stages, gated by the
+same `X-Carnac-Ledger-Token` RLS pattern as the rest of the plane; a degraded
+write is recorded truthfully and never blocks finalization (bounded retry, up to
+`CARNAC_LIFECYCLE_MAX_ATTEMPTS`).
+
 ## Endpoints
 
 Public (no auth, free on the MPP rail):
@@ -152,6 +212,7 @@ Public (no auth, free on the MPP rail):
 | GET    | `/v1/carnac/policy`           | current governed floor (public-safe fields) |
 | POST   | `/v1/carnac/verify`           | verify a complete signed artifact; public-safe result |
 | GET    | `/v1/carnac/verify/:id`       | verify a stored judgment by opaque id; rate-limited, enumeration-resistant |
+| POST   | `/v1/carnac/lifecycle/verify` | verify a complete lifecycle chain + Merkle inclusion, by value, no plaintext |
 | GET    | `/v1/carnac/health`           | compute + ledger + PQ + policy + continuity health, with a readiness gate |
 
 Protected (constant-time bearer auth; tenant-scoped):
@@ -166,6 +227,10 @@ Protected (constant-time bearer auth; tenant-scoped):
 | GET    | `/v1/carnac/howler/:id`       | fetch a Howler; verify signature + binding to its judgment |
 | GET    | `/v1/carnac/export`           | tenant-scoped audit export (`format=json\|csv`) for a trajectory or time range |
 | POST   | `/v1/carnac/seal`             | signed continuity checkpoint over a trajectory chain |
+| POST   | `/v1/carnac/lifecycle/open`   | open a lifecycle chain; tenant taken from the caller, optional Receipt #0 seed |
+| POST   | `/v1/carnac/lifecycle/:id/stage` | append a typed stage; raw text is hashed and dropped; instruction authority enforced |
+| GET    | `/v1/carnac/lifecycle/:id`    | read a lifecycle's ordered stages, head, and pending/final counts (tenant-scoped) |
+| POST   | `/v1/carnac/lifecycle/:id/finalize` | force-drain the finalizer (ops/testing); makes pending→final observable |
 
 CORS: the public sandbox is reflected only for allowlisted origins
 (`https://thehiveryiq.com`, `www`, local dev, plus `CARNAC_PUBLIC_ORIGINS`
@@ -209,8 +274,19 @@ to the floor and flagged `override_clamped: true`. Dispositions are append-only.
   binding, public-safe verification, audit export, dispatch honesty, PQ
   fail-closed, raw-prompt non-persistence, and a full formation→effect→Howler→
   disposition→export→seal e2e fixture.
+- `test/carnac_lifecycle.test.js` covers the lifecycle chain: canonicalization
+  determinism/order-independence, monotonic stage ordering, chain continuity,
+  idempotent append, origin-gated instruction authority, evidence-status honesty,
+  tenant isolation, no-raw-prompt/output persistence, the pending→final
+  transition, ed25519-canonical signature verification, tamper detection,
+  disposition linkage, delegated braid links, replay classes, Receipt #0 reuse,
+  Merkle inclusion, and durable-persist retry/failure behavior.
 - `node bench/carnac_bench.js [iterations]` measures throughput/latency of the
   deterministic classifier and the full signed-judgment path.
+- `node bench/lifecycle_bench.js [iterations]` measures the lifecycle **serving**
+  path (`appendStage`: local hash + enqueue, no signature, no network) separately
+  from the **asynchronous** finalizer (`drainFinalize`: ed25519 canonical sign +
+  Merkle batch + persist). Numbers are environment-specific; none are hard-coded.
 
 ## Environment
 
@@ -231,6 +307,10 @@ to the floor and flagged `override_clamped: true`. Dispositions are append-only.
 | `CARNAC_PUBLIC_ORIGINS`   | extra CORS origins allowed to call the public sandbox |
 | `CARNAC_VERIFY_RATE_PER_MIN` | by-id verification rate limit (default `30`)     |
 | `CARNAC_HOWLER_TABLE` / `CARNAC_DISPOSITION_TABLE` / `CARNAC_DISPATCH_TABLE` / `CARNAC_SEAL_TABLE` | durable table-name overrides |
+| `CARNAC_LIFECYCLE_TABLE`  | lifecycle stage table name (default `carnac_lifecycle_stages`) |
+| `CARNAC_LIFECYCLE_BATCH`  | Merkle batch size in the finalizer (default `16`)   |
+| `CARNAC_LIFECYCLE_FLUSH_MS` | background finalizer interval in ms (default `50`) |
+| `CARNAC_LIFECYCLE_MAX_ATTEMPTS` | bounded durable-persist retries per stage (default `5`) |
 
 Public routes (sandbox, policy, verify, health) are optional-config and always
 available. **Protected production routes fail closed**: without a reachable
@@ -245,7 +325,13 @@ columns on `carnac_judgments`; the `carnac_dispositions`, `carnac_howlers`,
 
     docs/migrations/0001_carnac_hardening.sql
 
-Apply it out-of-band against the Supabase/Postgres instance — the service never
-runs it automatically. After applying, set the RLS gate once:
+A second idempotent migration provisions the lifecycle stage table
+(`carnac_lifecycle_stages`, its indexes, and the same header-token RLS). It
+depends on the `carnac_ledger_authorized()` helper from the first migration:
+
+    docs/migrations/0002_carnac_lifecycle.sql
+
+Apply both out-of-band against the Supabase/Postgres instance — the service never
+runs them automatically. After applying, set the RLS gate once:
 
     ALTER DATABASE <db> SET app.carnac_ledger_token = '<CARNAC_LEDGER_TOKEN>';
