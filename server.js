@@ -23,6 +23,7 @@ import { fetchHowler, verifyHowler } from './lib/carnac/howler_store.js';
 import { verifyArtifact, verifyById } from './lib/carnac/verify.js';
 import { buildExport, exportToCsv } from './lib/carnac/export.js';
 import { sealTrajectory } from './lib/carnac/seal.js';
+import { sandboxDispatchTrace } from './lib/carnac/dispatch.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -533,6 +534,7 @@ app.post('/v1/carnac/sandbox', async (req, res) => {
       howler: result.howler,
       ledger: result.ledger,
       idempotent_replay: Boolean(result.idempotent_replay),
+      dispatch: sandboxDispatchTrace(result.envelope),
     });
   } catch (e) {
     res.status(500).json({ error: 'carnac_error', message: e.message });
