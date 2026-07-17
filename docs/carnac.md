@@ -102,20 +102,88 @@ as "no data." Sandbox judgments never touch the durable ledger.
 - **Order** — trajectory reads must not regress in phase, and `seq` must
   strictly increase.
 
+## Production hardening
+
+The protected production plane fails closed. A protected route requires an
+authenticated caller and, for material reads, a durable ledger and a real
+post-quantum signature — none of which are simulated.
+
+- **Auth & tenancy** (`lib/carnac/auth.js`) — protected routes require a
+  constant-time bearer match against an owner-admin token (`SITE_INTEL_TOKEN` /
+  `OWNER_ADMIN_TOKEN`) or a per-tenant service token (`CARNAC_SERVICE_TOKENS`,
+  `tenant:token` pairs, comma-separated). A service token binds the caller to its
+  own `tenant_id`; the owner-admin token may act across tenants. `tenant_id` is
+  bound **inside** the signed payload and the ledger row, and every
+  retrieval/trajectory/disposition/Howler/export enforces tenant scope. A
+  protected record is never confirmed to exist for an unauthenticated or
+  cross-tenant caller — a miss and a scope violation both surface as `404`.
+- **Sandbox isolation** — `POST /v1/carnac/sandbox` runs under a fixed public
+  tenant (`SANDBOX_TENANT`), never persists to the durable ledger, mints no
+  Howler, and may run in an explicitly degraded no-PQ state.
+- **Continuity chain** — each trajectory read links to its predecessor via
+  `previous_digest`/`chain_digest`. `enforceContinuity` requires a numeric,
+  monotonic `seq` and rejects a duplicate (`duplicate_seq`, checked against memory
+  **and** the durable ledger so a replay is caught across a restart), a missing
+  seq (`seq_required`), or a regression (`out_of_order`). `verifyChain()`
+  re-walks a listing and reports any break.
+- **Post-quantum signing** (`lib/carnac/pqsign.js`) — a real ML-DSA-65 signature
+  from the external Hive typed signer, carried as a `pq` sibling of the ed25519
+  envelope and bound by `pq.payload_sha256 === signed_payload_sha256`. Protected
+  production routes fail closed (`503 pq_unavailable`) when the signer is
+  unreachable; the sandbox reports `pq.degraded: true`. **No signature or
+  algorithm label is ever fabricated.** The ed25519 signature is retained as the
+  compatibility/transport signature.
+- **Honest dispatch** (`lib/carnac/dispatch.js`) — the primary route is recorded
+  against a real in-repo Canon primitive when one is callable; otherwise an
+  explicit signed dispatch record is persisted with `status: pending_external` and
+  the target primitive named. An external primitive is never implied to have run.
+- **Privacy** — raw prompt/output text is never stored in a judgment, Howler,
+  disposition, dispatch record, log, metric, audit export, or Supabase row. Only
+  the feature digest, consequence vector, policy/rule ids, routing data, and
+  signed commitments cross any boundary.
+
 ## Endpoints
+
+Public (no auth, free on the MPP rail):
 
 | method | path                          | notes                                    |
 |--------|-------------------------------|------------------------------------------|
-| POST   | `/v1/carnac/sandbox`          | public, no-effect read; never durable    |
-| POST   | `/v1/carnac/judge`            | durable read; may mint a Howler          |
-| GET    | `/v1/carnac/judgment/:id`     | fetch + re-verify a prior judgment       |
-| GET    | `/v1/carnac/trajectory/:id`   | list judgments bound to a trajectory     |
-| GET    | `/v1/carnac/policy`           | current governed floor                   |
-| POST   | `/v1/carnac/policy/amend`     | governed PolicyAmendment (attestor-signed) |
-| GET    | `/v1/carnac/health`           | compute + ledger + policy health         |
+| POST   | `/v1/carnac/sandbox`          | public, no-effect read; fixed sandbox tenant; never durable |
+| GET    | `/v1/carnac/policy`           | current governed floor (public-safe fields) |
+| POST   | `/v1/carnac/verify`           | verify a complete signed artifact; public-safe result |
+| GET    | `/v1/carnac/verify/:id`       | verify a stored judgment by opaque id; rate-limited, enumeration-resistant |
+| GET    | `/v1/carnac/health`           | compute + ledger + PQ + policy + continuity health, with a readiness gate |
 
-All `/v1/carnac/*` paths are free (never charged by the MPP rail). MCP tools
-`carnac_judge` (sandbox) and `carnac_verify` are exposed on `/mcp`.
+Protected (constant-time bearer auth; tenant-scoped):
+
+| method | path                          | notes                                    |
+|--------|-------------------------------|------------------------------------------|
+| POST   | `/v1/carnac/judge`            | durable read; requires tenant + real PQ; may mint a Howler |
+| GET    | `/v1/carnac/judgment/:id`     | fetch + re-verify a prior judgment (tenant-scoped) |
+| GET    | `/v1/carnac/trajectory/:id`   | durable, tenant-scoped, seq-ordered trajectory listing |
+| POST   | `/v1/carnac/policy/amend`     | governed PolicyAmendment (attestor-signed) |
+| POST   | `/v1/carnac/disposition`      | append-only human/actor decision; an override never lowers the floor |
+| GET    | `/v1/carnac/howler/:id`       | fetch a Howler; verify signature + binding to its judgment |
+| GET    | `/v1/carnac/export`           | tenant-scoped audit export (`format=json\|csv`) for a trajectory or time range |
+| POST   | `/v1/carnac/seal`             | signed continuity checkpoint over a trajectory chain |
+
+CORS: the public sandbox is reflected only for allowlisted origins
+(`https://thehiveryiq.com`, `www`, local dev, plus `CARNAC_PUBLIC_ORIGINS`
+extras) — **never a wildcard for protected routes**. MCP tools `carnac_judge`
+(sandbox) and `carnac_verify` (public-safe by id) are exposed on `/mcp`.
+
+### Readiness
+
+`GET /v1/carnac/health` reports each subsystem truthfully and gates
+`readiness.protected_routes_ready` on **all** of: a reachable durable ledger, an
+available PQ signer, and configured auth. The sandbox remains available even when
+protected readiness is `false`.
+
+### Disposition actions
+
+`confirm | reject | override | release | unresolved`. An `override` may only
+**raise** the effective level: an override below the judgment's floor is clamped
+to the floor and flagged `override_clamped: true`. Dispositions are append-only.
 
 ### Request shape
 
@@ -134,8 +202,13 @@ All `/v1/carnac/*` paths are free (never charged by the MPP rail). MCP tools
 
 ## Tests & benchmark
 
-- `npm test` runs `test/carnac.test.js` (offline, deterministic — the semantic
-  reader is disabled) alongside the rest of the suite.
+- `npm test` runs `test/carnac.test.js` and `test/carnac_hardening.test.js`
+  (offline, deterministic — the semantic reader and the PQ signer are mocked)
+  alongside the rest of the suite. The hardening suite covers auth/tenancy,
+  continuity + replay, durable retrieval across a restart, dispositions, Howler
+  binding, public-safe verification, audit export, dispatch honesty, PQ
+  fail-closed, raw-prompt non-persistence, and a full formation→effect→Howler→
+  disposition→export→seal e2e fixture.
 - `node bench/carnac_bench.js [iterations]` measures throughput/latency of the
   deterministic classifier and the full signed-judgment path.
 
@@ -148,7 +221,31 @@ All `/v1/carnac/*` paths are free (never charged by the MPP rail). MCP tools
 | `CARNAC_LEDGER_SUPA_URL`  | durable ledger base URL (falls back to `SUPA_URL`)  |
 | `CARNAC_LEDGER_SUPA_KEY`  | durable ledger key (falls back to `SUPA_KEY`)       |
 | `CARNAC_LEDGER_TABLE`     | ledger table name (default `carnac_judgments`)      |
+| `CARNAC_LEDGER_TOKEN`     | RLS header token (`X-Carnac-Ledger-Token`); durable writes fail closed without it |
 | `CARNAC_POLICY_ATTESTORS` | comma-separated base64 SPKI ed25519 attestor keys   |
+| `SITE_INTEL_TOKEN` / `OWNER_ADMIN_TOKEN` | owner-admin bearer for protected routes (cross-tenant) |
+| `CARNAC_SERVICE_TOKENS`   | comma-separated `tenant:token` service bearers (tenant-scoped) |
+| `HIVE_PQ_SIGNER_URL`      | external Hive ML-DSA-65 typed signer endpoint       |
+| `HIVE_PQ_SIGNER_TOKEN`    | bearer for the PQ signer                             |
+| `HIVE_PQ_SIGNER_ALGO`     | PQ algorithm label (default `ML-DSA-65`)             |
+| `CARNAC_PUBLIC_ORIGINS`   | extra CORS origins allowed to call the public sandbox |
+| `CARNAC_VERIFY_RATE_PER_MIN` | by-id verification rate limit (default `30`)     |
+| `CARNAC_HOWLER_TABLE` / `CARNAC_DISPOSITION_TABLE` / `CARNAC_DISPATCH_TABLE` / `CARNAC_SEAL_TABLE` | durable table-name overrides |
 
-All are optional. With none set, the plane runs on the deterministic floor with
-an in-memory ledger and an unlowerable default floor.
+Public routes (sandbox, policy, verify, health) are optional-config and always
+available. **Protected production routes fail closed**: without a reachable
+durable ledger, a real PQ signer, and configured auth, `judge` and the other
+protected routes return a truthful `503`/`401` rather than a fabricated result.
+
+## Durable migration
+
+One idempotent SQL migration provisions the durable schema (tenant + continuity
+columns on `carnac_judgments`; the `carnac_dispositions`, `carnac_howlers`,
+`carnac_dispatch`, `carnac_seals` tables; indexes; and header-token RLS):
+
+    docs/migrations/0001_carnac_hardening.sql
+
+Apply it out-of-band against the Supabase/Postgres instance — the service never
+runs it automatically. After applying, set the RLS gate once:
+
+    ALTER DATABASE <db> SET app.carnac_ledger_token = '<CARNAC_LEDGER_TOKEN>';

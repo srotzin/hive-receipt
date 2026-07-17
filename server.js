@@ -14,8 +14,15 @@ import { fetchEvents, insertHit } from './lib/site_store.js';
 import { checkOwnerAuth, getConfiguredToken } from './lib/owner_auth.js';
 import { judge, verifyJudgment, currentPolicy } from './lib/carnac/engine.js';
 import { amendPolicy } from './lib/carnac/policy.js';
-import { fetchJudgment, listByTrajectory, ledgerHealth } from './lib/carnac/ledger.js';
+import { fetchJudgment, listByTrajectoryDurable, ledgerHealth } from './lib/carnac/ledger.js';
 import { computeHealth } from './lib/carnac/compute.js';
+import { authenticateCarnac, tenantScopeAllows, carnacAuthConfigured, SANDBOX_TENANT } from './lib/carnac/auth.js';
+import { pqHealth } from './lib/carnac/pqsign.js';
+import { recordDisposition, listDispositions } from './lib/carnac/dispositions.js';
+import { fetchHowler, verifyHowler } from './lib/carnac/howler_store.js';
+import { verifyArtifact, verifyById } from './lib/carnac/verify.js';
+import { buildExport, exportToCsv } from './lib/carnac/export.js';
+import { sealTrajectory } from './lib/carnac/seal.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -23,7 +30,40 @@ app.use(express.json());
 app.use(recruitmentResponseWrapper);
 
 // ─── CORS middleware ──────────────────────────────────────────────────────────
+// Carnac routes use route-specific, allowlisted CORS (NEVER wildcard) so a
+// protected route can never be invoked cross-origin from an arbitrary site. The
+// public sandbox remains callable from the marketing site and local dev. The
+// rest of the service keeps its existing wildcard posture, unchanged.
+const CARNAC_PUBLIC_ORIGINS = () => {
+  const base = [
+    'https://thehiveryiq.com',
+    'https://www.thehiveryiq.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+  ];
+  const extra = (process.env.CARNAC_PUBLIC_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return new Set([...base, ...extra]);
+};
+
+app.use('/v1/carnac', (req, res, next) => {
+  const origin = req.headers.origin;
+  const allowed = CARNAC_PUBLIC_ORIGINS();
+  if (origin && allowed.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Carnac-Tenant');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(origin && allowed.has(origin) ? 204 : 403);
+  next();
+});
+
 app.use((req, res, next) => {
+  // Carnac handles its own (non-wildcard) CORS above.
+  if (req.path.startsWith('/v1/carnac')) return next();
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, X-Did, X-Signature');
@@ -338,12 +378,13 @@ app.post('/mcp', async (req, res) => {
     }
 
     if (toolName === 'carnac_verify') {
-      const envelope = await fetchJudgment(toolArgs.judgment_id);
-      if (!envelope) {
-        return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'judgment not found' }) }] } });
-      }
-      const verification = verifyJudgment(envelope);
-      return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ ...envelope, signature_valid: verification.valid }) }] } });
+      // Public-safe: return only cryptographic validity + a non-sensitive
+      // projection. Never leak tenant identity or unrelated ledger fields.
+      const result = await verifyById(toolArgs.judgment_id, { client: 'mcp' });
+      const body = result.ok
+        ? { found: result.found, signature_valid: result.signature_valid, pq: result.pq, artifact: result.artifact || null }
+        : { error: result.code, message: result.message };
+      return res.json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(body) }] } });
     }
 
     return res.json({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` } });
@@ -442,16 +483,44 @@ app.get('/v1/receipt/list/:payer_did', (req, res) => {
 // ── Carnac judgment & routing plane ───────────────────────────────────────────
 // The judgment plane reads consequence across a request's lifecycle and composes
 // a signed disposition. It never commits the effect itself. See docs/carnac.md.
-//   POST /v1/carnac/sandbox        public, no-effect read (never durable)
-//   POST /v1/carnac/judge          real read (durable ledger, may mint a Howler)
+//
+// Public (no auth):
+//   POST /v1/carnac/sandbox        no-effect read (never durable, fixed sandbox tenant)
+//   GET  /v1/carnac/policy         current governed floor (public-safe fields)
+//   POST /v1/carnac/verify         verify a complete signed artifact by value
+//   GET  /v1/carnac/verify/:id     verify a stored judgment by id (rate-limited)
+//   GET  /v1/carnac/health         compute + durable ledger + PQ signer + policy + readiness
+// Protected (constant-time bearer; tenant-scoped, existence never leaked):
+//   POST /v1/carnac/judge          real read (durable ledger, PQ-signed, may mint a Howler)
 //   GET  /v1/carnac/judgment/:id   fetch + re-verify a prior judgment
-//   GET  /v1/carnac/trajectory/:id list judgments bound to a trajectory
-//   GET  /v1/carnac/policy         current governed floor
+//   GET  /v1/carnac/trajectory/:id durable, tenant-scoped, ordered trajectory listing
 //   POST /v1/carnac/policy/amend   governed PolicyAmendment (attestor-signed)
-//   GET  /v1/carnac/health         compute + ledger + policy health
+//   POST /v1/carnac/disposition    append-only human/actor disposition
+//   GET  /v1/carnac/howler/:id     fetch + verify a Howler and its judgment binding
+//   GET  /v1/carnac/export         tenant-scoped audit export (JSON or CSV)
+//   POST /v1/carnac/seal           sign a continuity checkpoint over a trajectory
 
 function carnacBadInput(res, result) {
   return res.status(result.status || 400).json({ error: result.code, message: result.message });
+}
+
+// Authenticate a protected Carnac request. On failure it writes the response and
+// returns null; callers must stop. Existence is never leaked because auth is
+// resolved before any record lookup.
+function requireCarnacAuth(req, res, { requireTenant = false } = {}) {
+  const auth = authenticateCarnac(req, { requireTenant });
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.code, message: auth.message });
+    return null;
+  }
+  return auth;
+}
+
+// Pseudonymous per-client id for verification rate limiting — the raw IP is
+// never stored, only a truncated salted hash.
+function verifyClientId(req) {
+  const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || '';
+  return crypto.createHash('sha256').update(`carnac-verify|${ip}`).digest('hex').slice(0, 32);
 }
 
 app.post('/v1/carnac/sandbox', async (req, res) => {
@@ -471,8 +540,17 @@ app.post('/v1/carnac/sandbox', async (req, res) => {
 });
 
 app.post('/v1/carnac/judge', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
   try {
-    const result = await judge(req.body || {}, { sandbox: false });
+    const result = await judge(req.body || {}, {
+      sandbox: false,
+      tenant_id: auth.tenant_id,
+      actor: auth.actor,
+      requireTenant: true,
+      requirePQ: true,
+      enforceContinuity: Boolean(req.body && req.body.trajectory_id),
+    });
     if (!result.ok) return carnacBadInput(res, result);
     res.json({
       sandbox: false,
@@ -487,15 +565,22 @@ app.post('/v1/carnac/judge', async (req, res) => {
 });
 
 app.get('/v1/carnac/judgment/:id', async (req, res) => {
+  const auth = requireCarnacAuth(req, res);
+  if (!auth) return;
   const envelope = await fetchJudgment(req.params.id);
-  if (!envelope) return res.status(404).json({ error: 'not_found', message: 'judgment not found' });
+  // A record the caller may not see is indistinguishable from a missing one.
+  if (!envelope || !tenantScopeAllows(auth, envelope.tenant_id || null)) {
+    return res.status(404).json({ error: 'not_found', message: 'judgment not found' });
+  }
   const verification = verifyJudgment(envelope);
   res.json({ judgment: envelope, signature_valid: verification.valid, signature_error: verification.error || null });
 });
 
-app.get('/v1/carnac/trajectory/:id', (req, res) => {
-  const judgments = listByTrajectory(req.params.id);
-  res.json({ trajectory_id: req.params.id, count: judgments.length, judgments });
+app.get('/v1/carnac/trajectory/:id', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const { source, judgments } = await listByTrajectoryDurable(auth.tenant_id, req.params.id);
+  res.json({ trajectory_id: req.params.id, tenant_id: auth.tenant_id, source, count: judgments.length, judgments });
 });
 
 app.get('/v1/carnac/policy', (_req, res) => {
@@ -503,23 +588,125 @@ app.get('/v1/carnac/policy', (_req, res) => {
 });
 
 app.post('/v1/carnac/policy/amend', (req, res) => {
+  const auth = requireCarnacAuth(req, res);
+  if (!auth) return;
   const { amendment, signatures } = req.body || {};
   const result = amendPolicy(amendment, signatures || []);
   if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
   res.json({ ok: true, direction: result.direction, policy: result.policy });
 });
 
+app.post('/v1/carnac/disposition', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const body = req.body || {};
+  if (!body.judgment_id) return res.status(400).json({ error: 'judgment_required', message: 'judgment_id required' });
+  // The judgment must exist and be visible to this caller; the disposition floor
+  // is the judgment's own effective level, so an override can never lower it.
+  const judgment = await fetchJudgment(body.judgment_id);
+  if (!judgment || !tenantScopeAllows(auth, judgment.tenant_id || null)) {
+    return res.status(404).json({ error: 'not_found', message: 'judgment not found' });
+  }
+  const result = await recordDisposition({
+    tenant_id: judgment.tenant_id || auth.tenant_id,
+    judgment_id: body.judgment_id,
+    trajectory_id: body.trajectory_id || judgment.trajectory_id || null,
+    howler_id: body.howler_id || judgment.howler_id || null,
+    actor: auth.actor,
+    action: body.action,
+    reason: body.reason || '',
+    floor_level: judgment.effective_level,
+    override_level: body.override_level,
+  });
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  res.json({ ok: true, disposition: result.record, ledger: result.ledger });
+});
+
+app.get('/v1/carnac/howler/:id', async (req, res) => {
+  const auth = requireCarnacAuth(req, res);
+  if (!auth) return;
+  const howler = await fetchHowler(req.params.id);
+  if (!howler || !tenantScopeAllows(auth, howler.tenant_id || null)) {
+    return res.status(404).json({ error: 'not_found', message: 'howler not found' });
+  }
+  const judgment = await fetchJudgment(howler.judgment_id);
+  const verification = verifyHowler(howler, judgment);
+  res.json({ howler, verification });
+});
+
+app.post('/v1/carnac/verify', async (req, res) => {
+  try {
+    const artifact = (req.body && req.body.artifact) || req.body || {};
+    const result = await verifyArtifact(artifact);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: 'carnac_error', message: e.message });
+  }
+});
+
+app.get('/v1/carnac/verify/:id', async (req, res) => {
+  const result = await verifyById(req.params.id, { client: verifyClientId(req) });
+  if (!result.ok) {
+    if (result.retry_after_s) res.setHeader('Retry-After', String(result.retry_after_s));
+    return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  }
+  res.json(result);
+});
+
+app.get('/v1/carnac/export', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const result = await buildExport({
+    tenant_id: auth.tenant_id,
+    trajectory_id: req.query.trajectory_id || undefined,
+    from: req.query.from || undefined,
+    to: req.query.to || undefined,
+    limit: req.query.limit ? Number(req.query.limit) : undefined,
+  });
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  if ((req.query.format || '').toLowerCase() === 'csv') {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="carnac-audit-export.csv"');
+    return res.send(exportToCsv(result.report));
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(result.report);
+});
+
+app.post('/v1/carnac/seal', async (req, res) => {
+  const auth = requireCarnacAuth(req, res, { requireTenant: true });
+  if (!auth) return;
+  const trajectory_id = (req.body && req.body.trajectory_id) || null;
+  const result = await sealTrajectory({ tenant_id: auth.tenant_id, trajectory_id });
+  if (!result.ok) return res.status(result.status || 400).json({ error: result.code, message: result.message });
+  res.json({ ok: true, seal: result.seal, verification: result.verification, source: result.source, ledger: result.ledger });
+});
+
 app.get('/v1/carnac/health', async (_req, res) => {
-  const [compute, ledger] = await Promise.all([computeHealth(), ledgerHealth()]);
+  const [compute, ledger, pq] = await Promise.all([computeHealth(), ledgerHealth(), pqHealth()]);
   const policy = currentPolicy();
-  const status = ledger.durable_configured && !ledger.durable_reachable ? 'degraded' : 'ok';
+  const durableOk = ledger.durable_configured ? Boolean(ledger.durable_reachable) : false;
+  const authConfigured = carnacAuthConfigured();
+  // Protected production routes are ready only when effects can be recorded
+  // durably AND carry a real post-quantum signature AND auth is configured. The
+  // public sandbox is always available (in a degraded no-PQ state if needed).
+  const protectedReady = Boolean(durableOk && pq.available && authConfigured);
   res.json({
-    status,
+    status: protectedReady ? 'ok' : 'degraded',
     service: 'carnac',
     spectral_pubkey: getPublicKeyB64(),
     compute,
     ledger,
+    pq,
     policy,
+    continuity: { chain_algo: 'sha256', sealing: 'available' },
+    readiness: {
+      protected_routes_ready: protectedReady,
+      durable_ledger: durableOk,
+      pq_signer: pq.available,
+      auth_configured: authConfigured,
+      sandbox_available: true,
+    },
     ts: new Date().toISOString(),
   });
 });

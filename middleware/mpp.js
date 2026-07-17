@@ -173,7 +173,14 @@ function isFreePath(path) {
   if (FREE_PATHS.has(path)) return true;
   if (path.startsWith('/.well-known/')) return true;
   if (path.startsWith('/v1/site/')) return true; // owner analytics, token-gated separately
-  if (path.startsWith('/v1/carnac/')) return true; // judgment plane: sandbox is public, judge is a low-cost breadcrumb
+
+  // Carnac judgment plane: only the genuinely public routes are free. Protected
+  // routes are NOT blanket-bypassed here — they enforce their own bearer auth so
+  // an unauthenticated caller cannot slip through the generic free-path list.
+  if (path === '/v1/carnac/health') return true;
+  if (path === '/v1/carnac/policy') return true;
+  if (path === '/v1/carnac/sandbox') return true;
+  if (path === '/v1/carnac/verify' || path.startsWith('/v1/carnac/verify/')) return true;
 
   if (path.startsWith('/v1/receipt/verify/')) return true;
   if (path.startsWith('/v1/receipt/list/'))   return true;
