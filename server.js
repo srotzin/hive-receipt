@@ -33,6 +33,8 @@ import {
   startFinalizer,
 } from './lib/carnac/lifecycle.js';
 import { makeInkframeRouter } from './lib/inkframe/routes.js';
+import { catalog as primitivesCatalog } from './lib/primitives.js';
+import { runSmoke } from './lib/primitives_smoke.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -817,6 +819,34 @@ app.use('/v1/inkframe', (req, res, next) => {
   next();
 });
 app.use('/v1/inkframe', makeInkframeRouter());
+
+// ── Primitive discovery + live smoke (public, credential-free) ────────────────
+// GET /v1/primitives         truthful catalog of runnable, gated, protected, and
+//                            catalog-only primitives with method, endpoint, and
+//                            a copy-paste curl for each runnable one.
+// GET /v1/primitives/smoke   exercises the runnable public set in-process and
+//                            returns a pass/fail line per primitive. Suitable for
+//                            live verification against the deployment.
+function publicBaseUrl(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  return host ? `${proto}://${host}` : '';
+}
+
+app.get('/v1/primitives', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  res.json(primitivesCatalog(publicBaseUrl(req)));
+});
+
+app.get('/v1/primitives/smoke', async (_req, res) => {
+  try {
+    const report = await runSmoke();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(report.ok ? 200 : 503).json(report);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: 'smoke_error', message: e.message });
+  }
+});
 
 // ── well-known / x402 ─────────────────────────────────────────────────────────
 

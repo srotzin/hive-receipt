@@ -43,6 +43,8 @@ MCP endpoint: `POST /mcp` (JSON-RPC 2.0, MCP `2024-11-05`)
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/health` | none | Health check |
+| GET | `/v1/primitives` | none | Truthful catalog of runnable, gated, protected, and catalog-only primitives with method, endpoint, and a copy-paste curl for each runnable one |
+| GET | `/v1/primitives/smoke` | none | Exercises the runnable public set in-process and returns a pass/fail line per primitive; ready for live verification |
 | GET | `/` | none | Service info + pubkey + pricing |
 | GET | `/.well-known/agent.json` | none | Agent card (Monroe + Spectral pubkey advertised) |
 | POST | `/mcp` | none | MCP JSON-RPC |
@@ -54,6 +56,37 @@ MCP endpoint: `POST /mcp` (JSON-RPC 2.0, MCP `2024-11-05`)
 | GET | `/v1/carnac/judgment/:id` | none | Fetch + re-verify a prior judgment |
 | GET | `/v1/carnac/policy` | none | Current governed floor |
 | GET | `/v1/carnac/health` | none | Compute + ledger + policy health |
+
+---
+
+## Live verification (no credentials)
+
+Every runnable primitive is public and credential-free. Discover them and prove
+they execute in two calls:
+
+```bash
+# 1. List runnable, gated, protected, and catalog-only primitives with sample curls
+curl -s https://inkframe.thehiveryiq.com/v1/primitives
+
+# 2. Exercise the runnable public set server-side and get a pass/fail per primitive
+curl -s https://inkframe.thehiveryiq.com/v1/primitives/smoke
+```
+
+The runnable set covers the Carnac Live Ink&trade; (InkFrame v1) substrate
+(`/v1/inkframe/frame`, `/cue-edge`, `/prefill`, `/replay`, `/countersign`,
+`/health`), the Carnac&trade; public reading plane (`/v1/carnac/sandbox`,
+`/policy`, `/verify`, `/lifecycle/verify`, `/health`), the free SiGR receipt
+reads, and the MCP tool surface. Disclosure-free replay refuses raw-text deltas;
+the arrival countersignature detects an approved-vs-delivered mismatch.
+
+A local or live soak run, with `p50`/`p95`/`p99`, is available from the CLI:
+
+```bash
+node bench/primitives_smoke.mjs https://inkframe.thehiveryiq.com 200
+```
+
+It exits non-zero if any primitive fails, so it drops straight into a health
+gate.
 
 ---
 

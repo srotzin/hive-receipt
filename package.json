@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "smoke": "node bench/primitives_smoke.mjs",
+    "bench:primitives": "node bench/primitives_smoke.mjs https://inkframe.thehiveryiq.com 200"
   },
   "dependencies": {
     "@noble/curves": "^1.4.0",
