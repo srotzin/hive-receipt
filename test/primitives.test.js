@@ -66,12 +66,18 @@ test('counts add up to the primitive total', () => {
   assert.equal(summed, c.primitives.length);
 });
 
-test('no user-facing string uses an em dash or a forbidden ruling word', () => {
+test('no public catalog field uses an em dash or a forbidden ruling word', () => {
   // The only permitted use of the ruling verb is the exact phrase below.
+  // Every publicly serialized field is scanned, including endpoint paths and
+  // resolved sample curls, so a legacy route identifier can never leak the word.
   const ALLOWED = 'It does not judge.';
   const forbidden = /judg|verdict/i;
+  const c = catalog('https://example.test');
   const strings = [];
-  for (const p of PRIMITIVES) strings.push(p.label, p.description, p.family);
+  for (const p of c.primitives) {
+    strings.push(p.label, p.description, p.family, p.endpoint, p.id, p.sample_curl || '');
+  }
+  strings.push(c.note);
   for (const s of strings) {
     assert.ok(!s.includes('—'), `no em dash in: ${s}`);
     const stripped = s.split(ALLOWED).join('');
