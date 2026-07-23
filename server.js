@@ -32,6 +32,7 @@ import {
   drainFinalize,
   startFinalizer,
 } from './lib/carnac/lifecycle.js';
+import { makeInkframeRouter } from './lib/inkframe/routes.js';
 assertEnvelopeIntegrity();
 
 const app = express();
@@ -799,6 +800,23 @@ app.get('/v1/carnac/health', async (_req, res) => {
     ts: new Date().toISOString(),
   });
 });
+
+// ── InkFrame v1 (Carnac Live Ink substrate) ─────────────────────────────────
+// Same CORS posture as Carnac public routes: only the marketing site and
+// local dev can call cross-origin.
+app.use('/v1/inkframe', (req, res, next) => {
+  const origin = req.headers.origin;
+  const allow = CARNAC_PUBLIC_ORIGINS();
+  if (origin && allow.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
+app.use('/v1/inkframe', makeInkframeRouter());
 
 // ── well-known / x402 ─────────────────────────────────────────────────────────
 
